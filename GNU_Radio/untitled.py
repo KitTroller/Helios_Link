@@ -66,6 +66,7 @@ class untitled(gr.top_block, Qt.QWidget):
         ##################################################
         # Variables
         ##################################################
+        self.squelch_thresh = squelch_thresh = -30
         self.samp_rate = samp_rate = 2000000
         self.rf_gain = rf_gain = 40
 
@@ -73,6 +74,9 @@ class untitled(gr.top_block, Qt.QWidget):
         # Blocks
         ##################################################
 
+        self._squelch_thresh_range = qtgui.Range(-100, -10, 1, -30, 200)
+        self._squelch_thresh_win = qtgui.RangeWidget(self._squelch_thresh_range, self.set_squelch_thresh, "'squelch_thresh'", "counter_slider", float, QtCore.Qt.Horizontal)
+        self.top_layout.addWidget(self._squelch_thresh_win)
         self._rf_gain_range = qtgui.Range(0, 49, 0.5, 40, 200)
         self._rf_gain_win = qtgui.RangeWidget(self._rf_gain_range, self.set_rf_gain, "'rf_gain'", "counter_slider", float, QtCore.Qt.Horizontal)
         self.top_layout.addWidget(self._rf_gain_win)
@@ -193,19 +197,31 @@ class untitled(gr.top_block, Qt.QWidget):
 
         self._qtgui_freq_sink_x_0_win = sip.wrapinstance(self.qtgui_freq_sink_x_0.qwidget(), Qt.QWidget)
         self.top_layout.addWidget(self._qtgui_freq_sink_x_0_win)
+        self.low_pass_filter_0 = filter.fir_filter_ccf(
+            10,
+            firdes.low_pass(
+                1,
+                samp_rate,
+                150000,
+                25000,
+                window.WIN_HAMMING,
+                6.76))
         self.audio_sink_0 = audio.sink(48000, '', True)
         self.analog_wfm_rcv_0 = analog.wfm_rcv(
-        	quad_rate=2000000,
-        	audio_decimation=10,
+        	quad_rate=200000,
+        	audio_decimation=1,
         )
+        self.analog_pwr_squelch_xx_0 = analog.pwr_squelch_ff(squelch_thresh, (1e-4), 0, True)
 
 
         ##################################################
         # Connections
         ##################################################
-        self.connect((self.analog_wfm_rcv_0, 0), (self.rational_resampler_xxx_0, 0))
+        self.connect((self.analog_pwr_squelch_xx_0, 0), (self.rational_resampler_xxx_0, 0))
+        self.connect((self.analog_wfm_rcv_0, 0), (self.analog_pwr_squelch_xx_0, 0))
+        self.connect((self.low_pass_filter_0, 0), (self.analog_wfm_rcv_0, 0))
         self.connect((self.rational_resampler_xxx_0, 0), (self.audio_sink_0, 0))
-        self.connect((self.soapy_rtlsdr_source_0, 0), (self.analog_wfm_rcv_0, 0))
+        self.connect((self.soapy_rtlsdr_source_0, 0), (self.low_pass_filter_0, 0))
         self.connect((self.soapy_rtlsdr_source_0, 0), (self.qtgui_freq_sink_x_0, 0))
         self.connect((self.soapy_rtlsdr_source_0, 0), (self.qtgui_waterfall_sink_x_0, 0))
 
@@ -218,11 +234,19 @@ class untitled(gr.top_block, Qt.QWidget):
 
         event.accept()
 
+    def get_squelch_thresh(self):
+        return self.squelch_thresh
+
+    def set_squelch_thresh(self, squelch_thresh):
+        self.squelch_thresh = squelch_thresh
+        self.analog_pwr_squelch_xx_0.set_threshold(self.squelch_thresh)
+
     def get_samp_rate(self):
         return self.samp_rate
 
     def set_samp_rate(self, samp_rate):
         self.samp_rate = samp_rate
+        self.low_pass_filter_0.set_taps(firdes.low_pass(1, self.samp_rate, 150000, 25000, window.WIN_HAMMING, 6.76))
         self.qtgui_freq_sink_x_0.set_frequency_range(96800000, self.samp_rate)
         self.qtgui_waterfall_sink_x_0.set_frequency_range(96800000, self.samp_rate)
         self.soapy_rtlsdr_source_0.set_sample_rate(0, self.samp_rate)

@@ -66,21 +66,62 @@ blocks:
     coordinate: [176, 24.0]
     rotation: 0
     state: enabled
+- name: squelch_thresh
+  id: variable_qtgui_range
+  parameters:
+    comment: ''
+    gui_hint: ''
+    label: ''
+    min_len: '200'
+    orient: QtCore.Qt.Horizontal
+    rangeType: float
+    start: '-100'
+    step: '1'
+    stop: '-10'
+    value: '-30'
+    widget: counter_slider
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [736, 368.0]
+    rotation: 0
+    state: enabled
+- name: analog_pwr_squelch_xx_0
+  id: analog_pwr_squelch_xx
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha: 1e-4
+    comment: ''
+    gate: 'True'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    ramp: '0'
+    threshold: squelch_thresh
+    type: float
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [808, 280.0]
+    rotation: 0
+    state: enabled
 - name: analog_wfm_rcv_0
   id: analog_wfm_rcv
   parameters:
     affinity: ''
     alias: ''
-    audio_decimation: '10'
+    audio_decimation: '1'
     comment: ''
     maxoutbuf: '0'
     minoutbuf: '0'
-    quad_rate: '2000000'
+    quad_rate: '200000'
   states:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [440, 288.0]
+    coordinate: [632, 288.0]
     rotation: 0
     state: enabled
 - name: audio_sink_0
@@ -97,7 +138,31 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [840, 292.0]
+    coordinate: [1152, 292.0]
+    rotation: 0
+    state: enabled
+- name: low_pass_filter_0
+  id: low_pass_filter
+  parameters:
+    affinity: ''
+    alias: ''
+    beta: '6.76'
+    comment: ''
+    cutoff_freq: '150000'
+    decim: '10'
+    gain: '1'
+    interp: '1'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samp_rate: samp_rate
+    type: fir_filter_ccf
+    width: '25000'
+    win: window.WIN_HAMMING
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [480, 268.0]
     rotation: 0
     state: enabled
 - name: qtgui_freq_sink_x_0
@@ -259,7 +324,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [648, 280.0]
+    coordinate: [976, 280.0]
     rotation: 0
     state: enabled
 - name: soapy_rtlsdr_source_0
@@ -288,9 +353,11 @@ blocks:
     state: enabled
 
 connections:
-- [analog_wfm_rcv_0, '0', rational_resampler_xxx_0, '0']
+- [analog_pwr_squelch_xx_0, '0', rational_resampler_xxx_0, '0']
+- [analog_wfm_rcv_0, '0', analog_pwr_squelch_xx_0, '0']
+- [low_pass_filter_0, '0', analog_wfm_rcv_0, '0']
 - [rational_resampler_xxx_0, '0', audio_sink_0, '0']
-- [soapy_rtlsdr_source_0, '0', analog_wfm_rcv_0, '0']
+- [soapy_rtlsdr_source_0, '0', low_pass_filter_0, '0']
 - [soapy_rtlsdr_source_0, '0', qtgui_freq_sink_x_0, '0']
 - [soapy_rtlsdr_source_0, '0', qtgui_waterfall_sink_x_0, '0']
 
