@@ -1,0 +1,103 @@
+# HeliosLink Project .gitignore
+# Covers: STM32 CubeIDE, GNU Radio, macOS, Python
+
+# =============================================================================
+# STM32 CubeIDE / CubeMX — compiled output
+# =============================================================================
+# The Debug/ and Release/ folders are generated fresh on every build.
+# They contain .elf, .bin, .map, .list files — large binaries that change
+# constantly and have no place in version control.
+Debug/
+Release/
+
+# Object files — intermediate compiled output, one per .c file
+*.o
+*.d
+
+# Final compiled binary outputs — regenerated on every build
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+
+# Eclipse/CubeIDE workspace metadata — machine-specific, not portable
+.metadata/
+.settings/
+*.launch
+
+# CubeIDE project files — KEEP these (they define your project structure)
+# .project     ← keep
+# .cproject    ← keep
+# .mxproject   ← keep
+# *.ioc        ← keep (this is your CubeMX pin configuration — critical)
+
+# =============================================================================
+# GNU Radio
+# =============================================================================
+# .grc files ARE source — push them (they're your flowgraph designs)
+# The generated Python files are output — ignore them
+*.py.bak
+
+# GNU Radio generates a Python script when you press Run
+# You can optionally keep these as documentation, but they're regeneratable
+# Uncomment the next line if you want to ignore them:
+# *.py
+
+# =============================================================================
+# macOS
+# =============================================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Icon?
+Thumbs.db
+
+# macOS extended attributes archive
+__MACOSX/
+
+# =============================================================================
+# Python (for GNU Radio scripts and future Qt app)
+# =============================================================================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# =============================================================================
+# Qt / C++ (for future HeliosLink visualiser app)
+# =============================================================================
+*.pro.user
+*.qbs.user
+moc_*.cpp
+qrc_*.cpp
+ui_*.h
+Makefile
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# =============================================================================
+# Editors and IDEs
+# =============================================================================
+.vscode/
+*.swp
+*.swo
+*~
+.idea/
+
+# =============================================================================
+# Data logs — push selectively, not automatically
+# Raw measurement logs can be large; add specific ones manually with git add -f
+# =============================================================================
+*.log
+*.csv
