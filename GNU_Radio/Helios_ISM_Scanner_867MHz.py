@@ -65,7 +65,7 @@ class Helios_ISM_Scanner_867MHz(gr.top_block, Qt.QWidget):
         ##################################################
         self.samp_rate = samp_rate = 2000000
         self.rf_gain = rf_gain = 40
-        self.center_freq = center_freq = 868000000
+        self.center_freq = center_freq = 868200000
 
         ##################################################
         # Blocks
@@ -74,7 +74,7 @@ class Helios_ISM_Scanner_867MHz(gr.top_block, Qt.QWidget):
         self._rf_gain_range = qtgui.Range(0, 49, 1, 40, 200)
         self._rf_gain_win = qtgui.RangeWidget(self._rf_gain_range, self.set_rf_gain, "'rf_gain'", "counter_slider", float, QtCore.Qt.Horizontal)
         self.top_layout.addWidget(self._rf_gain_win)
-        self._center_freq_range = qtgui.Range(863000000, 870000000 , 100000, 868000000, 200)
+        self._center_freq_range = qtgui.Range(863000000, 870000000 , 100000, 868200000, 200)
         self._center_freq_win = qtgui.RangeWidget(self._center_freq_range, self.set_center_freq, "Centre Frequency (Hz)", "counter_slider", float, QtCore.Qt.Horizontal)
         self.top_layout.addWidget(self._center_freq_win)
         self.soapy_rtlsdr_source_0 = None
