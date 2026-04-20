@@ -26,6 +26,24 @@
  * This is standard HAL practice for peripheral sharing across files. */
 extern SPI_HandleTypeDef hspi2;
 
+/* Diagnostic: peak MARCSTATE value observed during the most recent TX.
+ * Expect 0x13 (TX) on a working chip. If this is ever 0x01 (IDLE only) or
+ * 0x08 (CALIBRATE) without advancing, the PLL never locked into TX. */
+volatile uint8_t g_cc1101_last_peak_marcstate = 0;
+
+/* RX diagnostics: populated on EVERY CC1101_ReceivePacket call regardless
+ * of CRC outcome. main.c prints them on CRC error to tell us what kind of
+ * corruption we are dealing with:
+ *   — g_cc1101_rx_raw[0..len-1]: the actual bytes pulled from the RX FIFO
+ *     (length byte, packet_id, command, payload...). If most bytes look
+ *     plausible it's marginal SNR / frequency offset; if all random it's
+ *     AGC overload or a mis-tuned receiver.
+ *   — g_cc1101_rx_lqi: 0–127, LOWER is BETTER (CC1101 defines it as error
+ *     count). Clean signal ~10–20, CRC errors typically ~50+. */
+volatile uint8_t g_cc1101_rx_raw[16] = {0};
+volatile uint8_t g_cc1101_rx_raw_len = 0;
+volatile uint8_t g_cc1101_rx_lqi     = 0;
+
 /* CS pin macros — pulling CS LOW selects the CC1101 and begins a transaction.
  * CS HIGH deselects it and ends the transaction. The CC1101 ignores all SPI
  * traffic while CS is high, so every function must bracket its SPI calls
@@ -95,6 +113,16 @@ void CC1101_WriteReg(uint8_t regAddr, uint8_t data) {
     HAL_SPI_Transmit(&hspi2, &data, 1, 100);     // Data byte
     CS_HIGH();
 }
+
+void CC1101_WritePATable(uint8_t value) {
+    uint8_t addr = CC1101_PATABLE | CC1101_WRITE_BURST; // 0x7E
+    uint8_t pa_table[8] = {value, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    CS_LOW();
+    HAL_SPI_Transmit(&hspi2, &addr, 1, 100);
+    HAL_SPI_Transmit(&hspi2, pa_table, 8, 100);
+    CS_HIGH();
+}
+
 
 /*
  * CC1101_ReadReg()
@@ -339,7 +367,8 @@ void CC1101_Init(void) {
      * EU ISM 868.0–868.6 MHz allows max 25 mW ERP with ≤1% duty cycle.
      * Duty cycle enforcement must be done in application code (see main.c).
      */
-    CC1101_WriteReg(CC1101_PATABLE,  0xC0);
+    //CC1101_WriteReg(CC1101_PATABLE,  0xC0);
+    CC1101_WritePATable(0xC0);
 }
 
 /* =========================================================================
@@ -395,51 +424,92 @@ CC1101_Status_t CC1101_Verify(void) {
  */
 CC1101_Status_t CC1101_SendPacket(CC1101_Packet_t *pkt) {
 
-    /* Sanity check: payload must fit in our frame */
     if (pkt->payload_len > CC1101_MAX_PAYLOAD) {
         return CC1101_ERR_OVERFLOW;
     }
 
-    /* Go to IDLE and flush the TX FIFO.
-     * Never transmit without flushing first — previous TX may have left
-     * bytes behind if it was interrupted. */
+    /* Step 1 — Force IDLE unconditionally.
+     * Covers any leftover state: stuck TX_END, aborted RX, anything. */
     CC1101_SendCmd(CC1101_SIDLE);
-    CC1101_SendCmd(CC1101_SFTX);
 
-    /* Build the TX buffer.
-     * Layout: [length_byte | packet_id | command | payload...]
-     * We write length_byte = 2 + payload_len (the CC1101 length byte
-     * counts everything that follows it, not including itself). */
-    uint8_t total_data_len = 2 + pkt->payload_len;   // packet_id + command + payload
-    uint8_t tx_buf[CC1101_MAX_PAYLOAD + 3];           // length byte + id + cmd + payload
-
-    tx_buf[0] = total_data_len;                        // CC1101 variable-length byte
-    tx_buf[1] = pkt->packet_id;                        // Our sequence number
-    tx_buf[2] = (uint8_t)pkt->command;                 // Our message type
-    memcpy(&tx_buf[3], pkt->payload, pkt->payload_len);// Our data
-
-    /* Burst-write everything to TX FIFO in one SPI transaction */
-    CC1101_WriteFIFO(tx_buf, total_data_len + 1);       // +1 to include the length byte itself
-
-    /* Kick off transmission */
-    CC1101_SendCmd(CC1101_STX);
-
-    /* Wait for TX to complete.
-     * The radio is in state TX (0x13) while transmitting.
-     * It returns to IDLE (0x01) when done.
-     * Timeout: 500 ms is generous even for maximum-length packets at 1.2 kbps. */
-    uint32_t timeout = HAL_GetTick() + 500;
-    uint8_t state;
-    do {
-        state = CC1101_ReadStatus(CC1101_MARCSTATE) & 0x1F;
-        if (HAL_GetTick() > timeout) {
-            CC1101_SendCmd(CC1101_SIDLE);   // Force radio back to IDLE
-            CC1101_SendCmd(CC1101_SFTX);    // Clean up the FIFO
+    /* Step 2 — Confirm IDLE via MARCSTATE.
+     * Issuing SFTX while not in IDLE (or TXFIFO_UNDERFLOW) is a no-op and
+     * leaves stale bytes in the FIFO. Waiting here is the single biggest
+     * reliability win: guarantees the chip is in a clean state before we
+     * touch the FIFO. SIDLE completes in <100 µs on a healthy chip. */
+    uint32_t deadline = HAL_GetTick() + 10;
+    while ((CC1101_ReadStatus(CC1101_MARCSTATE) & 0x1F) != CC1101_STATE_IDLE) {
+        if (HAL_GetTick() > deadline) {
             return CC1101_ERR_TIMEOUT;
         }
-    } while (state == CC1101_STATE_TX);
+    }
 
-    /* Check for FIFO underflow (shouldn't happen, but catch it) */
+    /* Step 3 — Flush TX FIFO now that IDLE is confirmed. */
+    CC1101_SendCmd(CC1101_SFTX);
+    HAL_Delay(1);
+
+    /* Step 4 — Build frame and burst-write to FIFO.
+     * Layout: [length | packet_id | command | payload...] */
+    uint8_t total_data_len = 2 + pkt->payload_len;
+    uint8_t tx_buf[CC1101_MAX_PAYLOAD + 3];
+    tx_buf[0] = total_data_len;
+    tx_buf[1] = pkt->packet_id;
+    tx_buf[2] = (uint8_t)pkt->command;
+    memcpy(&tx_buf[3], pkt->payload, pkt->payload_len);
+    CC1101_WriteFIFO(tx_buf, total_data_len + 1);
+
+    /* Step 5 — Verify bytes actually landed in the FIFO.
+     * TXBYTES[7] is a TXFIFO_UNDERFLOW flag; [6:0] is the count. If SPI
+     * corruption on the burst-write dropped bytes, the count will be wrong
+     * and we must NOT fire STX — that would produce an underflow mid-TX
+     * and leave the chip wedged. Flush and report instead. */
+    uint8_t txbytes = CC1101_ReadStatus(CC1101_TXBYTES) & 0x7F;
+    if (txbytes != (total_data_len + 1)) {
+        CC1101_SendCmd(CC1101_SFTX);
+        return CC1101_ERR_OVERFLOW;
+    }
+
+    /* Step 6 — Fire TX. MCSM0 = 0x18 auto-calibrates on IDLE→TX. */
+    CC1101_SendCmd(CC1101_STX);
+
+    /* Step 7 — Wait until the chip enters TX (0x13).
+     * Cal + settling ≈ 1.5 ms; TX itself is 100–400 ms depending on payload.
+     * 50 ms window is plenty for entry. */
+    uint8_t state = 0;
+    uint8_t peak  = 0;
+    deadline = HAL_GetTick() + 50;
+    while (1) {
+        state = CC1101_ReadStatus(CC1101_MARCSTATE) & 0x1F;
+        if (state > peak) peak = state;
+        if (state == CC1101_STATE_TX) break;
+        if (state == CC1101_STATE_TXFIFO_UNDERFLOW) break;
+        if (HAL_GetTick() > deadline) {
+            g_cc1101_last_peak_marcstate = peak;
+            CC1101_SendCmd(CC1101_SIDLE);
+            CC1101_SendCmd(CC1101_SFTX);
+            return CC1101_ERR_TIMEOUT;
+        }
+    }
+
+    /* Step 8 — Wait for TX to complete (state leaves 0x13).
+     * Pace the polling to 1 ms — hammering MARCSTATE during the TX→IDLE
+     * transition can land the chip in a stuck 0x14 substate on marginal
+     * breadboard wiring. */
+    deadline = HAL_GetTick() + 500;
+    while (state == CC1101_STATE_TX) {
+        HAL_Delay(1);
+        state = CC1101_ReadStatus(CC1101_MARCSTATE) & 0x1F;
+        if (state > peak) peak = state;
+        if (HAL_GetTick() > deadline) {
+            g_cc1101_last_peak_marcstate = peak;
+            CC1101_SendCmd(CC1101_SIDLE);
+            CC1101_SendCmd(CC1101_SFTX);
+            return CC1101_ERR_TIMEOUT;
+        }
+    }
+
+    g_cc1101_last_peak_marcstate = peak;
+
     if (state == CC1101_STATE_TXFIFO_UNDERFLOW) {
         CC1101_SendCmd(CC1101_SIDLE);
         CC1101_SendCmd(CC1101_SFTX);
@@ -551,6 +621,16 @@ CC1101_Status_t CC1101_ReceivePacket(CC1101_Packet_t *pkt, int8_t *rssi_out, uin
     uint8_t rssi_raw  = rx_raw[rxbytes - 2];
     uint8_t lqi_byte  = rx_raw[rxbytes - 1];
     uint8_t crc_ok    = (lqi_byte >> 7) & 0x01;   // Bit 7 = CRC_OK flag
+
+    /* Snapshot the first bytes + LQI into diagnostic globals.
+     * Populated BEFORE the CRC check, so main.c can inspect the corrupted
+     * frame on CRC_ERR return and see the corruption pattern. */
+    uint8_t copy_len = (rxbytes < 16) ? rxbytes : 16;
+    for (uint8_t i = 0; i < copy_len; i++) {
+        g_cc1101_rx_raw[i] = rx_raw[i];
+    }
+    g_cc1101_rx_raw_len = copy_len;
+    g_cc1101_rx_lqi     = lqi_byte & 0x7F;
 
     /* Decode our application frame */
     pkt->packet_id   = rx_raw[1];

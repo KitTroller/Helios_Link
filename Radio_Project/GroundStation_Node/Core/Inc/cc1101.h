@@ -153,5 +153,7 @@ uint8_t CC1101_ReadReg(uint8_t regAddr);    // For config registers 0x00–0x2E
 uint8_t CC1101_ReadStatus(uint8_t regAddr); // For status registers 0x30–0x3D (uses READ_BURST flag)
 void    CC1101_SendCmd(uint8_t cmd);
 
+void CC1101_WritePATable(uint8_t value);
+
 #endif /* INC_CC1101_H_ */
 /* INC_CC1101_H_ */

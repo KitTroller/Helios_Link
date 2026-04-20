@@ -87,8 +87,23 @@
 /* =========================================================================
  * ROLE SELECTION — change this line before flashing each board
  * ========================================================================= */
-#define NODE_TRANSMITTER
-// #define NODE_RECEIVER
+//#define NODE_TRANSMITTER
+#define NODE_RECEIVER
+
+/* =========================================================================
+ * DIAGNOSTIC MODE — comment out to return to normal packet TX/RX.
+ * When enabled, the transmitter runs back-to-back TX with instrumentation
+ * so we can confirm the chip actually reaches TX state and produces RF.
+ * ========================================================================= */
+//#define DIAGNOSTIC_MODE
+
+extern volatile uint8_t g_cc1101_last_peak_marcstate;
+
+/* RX diagnostic globals (defined in cc1101.c) — printed on CRC error to
+ * show what the receiver actually heard. */
+extern volatile uint8_t g_cc1101_rx_raw[16];
+extern volatile uint8_t g_cc1101_rx_raw_len;
+extern volatile uint8_t g_cc1101_rx_lqi;
 
 /* =========================================================================
  * Telemetry payload structure
@@ -145,6 +160,9 @@ int main(void) {
     /* Verify the chip is responding correctly over SPI.
      * If this fails, nothing else will work. Fix wiring before proceeding. */
     CC1101_Status_t verify_result = CC1101_Verify();
+    // Read back PATABLE to confirm it wrote correctly
+    uint8_t pa_check = CC1101_ReadReg(CC1101_PATABLE);
+    printf("PATABLE[0]: 0x%02X (expected 0xC0)\r\n", pa_check);
     if (verify_result != CC1101_OK) {
         printf("ERROR: CC1101 not detected! VERSION register returned unexpected value.\r\n");
         printf("Check: 3.3V power, SPI wiring (SCK=PB10, MOSI=PC1, MISO=PC2, CS=PB12)\r\n");
@@ -156,6 +174,71 @@ int main(void) {
 
     printf("CC1101 detected OK. Hardware version: 0x14\r\n\r\n");
     LED_Blink(3, 200, 200);  // 3 quick blinks = radio is alive
+
+#ifdef DIAGNOSTIC_MODE
+    /* =====================================================================
+     * DIAGNOSTIC: register dump + back-to-back TX with MARCSTATE tracking
+     * ===================================================================== */
+    printf("=== DIAGNOSTIC MODE ===\r\n");
+    printf("Register readback (after Init):\r\n");
+    printf("  FREQ2   = 0x%02X  (expect 0x21)\r\n", CC1101_ReadReg(CC1101_FREQ2));
+    printf("  FREQ1   = 0x%02X  (expect 0x62)\r\n", CC1101_ReadReg(CC1101_FREQ1));
+    printf("  FREQ0   = 0x%02X  (expect 0x76)\r\n", CC1101_ReadReg(CC1101_FREQ0));
+    printf("  MDMCFG4 = 0x%02X  (expect 0xF5)\r\n", CC1101_ReadReg(CC1101_MDMCFG4));
+    printf("  MDMCFG2 = 0x%02X  (expect 0x13)\r\n", CC1101_ReadReg(CC1101_MDMCFG2));
+    printf("  MCSM0   = 0x%02X  (expect 0x18)\r\n", CC1101_ReadReg(CC1101_MCSM0));
+    printf("  FREND0  = 0x%02X  (expect 0x10)\r\n", CC1101_ReadReg(CC1101_FREND0));
+    printf("  PATABLE = 0x%02X  (expect 0xC0)\r\n", CC1101_ReadReg(CC1101_PATABLE));
+    printf("  FSCAL3  = 0x%02X  (pre-cal)\r\n",    CC1101_ReadReg(CC1101_FSCAL3));
+    printf("  FSCAL1  = 0x%02X  (pre-cal, should change after 1st STX)\r\n",
+           CC1101_ReadReg(CC1101_FSCAL1));
+    printf("  VERSION = 0x%02X  (expect 0x14)\r\n", CC1101_ReadStatus(CC1101_VERSION));
+
+    printf("\r\nTuning target: 868.35 MHz. Set SDR++ to 2 MHz span, bandwidth wide open.\r\n");
+    printf("Running max-length TX every 2 seconds. Watch the SDR waterfall after each marker.\r\n");
+    printf("Peak MARCSTATE should be 0x13 (TX). FSCAL1 should be nonzero and STABLE across runs.\r\n\r\n");
+
+    CC1101_Packet_t diag_pkt;
+    diag_pkt.packet_id   = 0;
+    diag_pkt.command     = CMD_TELEMETRY;
+    diag_pkt.payload_len = CC1101_MAX_PAYLOAD;     // 58 bytes — max allowed
+    memset(diag_pkt.payload, 0x55, CC1101_MAX_PAYLOAD);  // 01010101 — distinct FSK tone pair
+
+    uint32_t diag_iter  = 0;
+    uint32_t ok_count   = 0;
+    uint32_t fail_count = 0;
+
+    while (1) {
+        /* Loud marker right before TX so you can align with SDR waterfall */
+        printf("\r\n--- [iter %lu] TX NOW (watch SDR at 868.35 MHz) ---\r\n", diag_iter);
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);  // LED ON during TX
+
+        CC1101_Status_t r = CC1101_SendPacket(&diag_pkt);
+
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
+        uint8_t peak   = g_cc1101_last_peak_marcstate;
+        uint8_t fscal1 = CC1101_ReadReg(CC1101_FSCAL1);
+        uint8_t fscal2 = CC1101_ReadReg(CC1101_FSCAL2);
+        uint8_t fscal3 = CC1101_ReadReg(CC1101_FSCAL3);
+        uint8_t marc_now = CC1101_ReadStatus(CC1101_MARCSTATE) & 0x1F;
+
+        const char *rs = (r == CC1101_OK)          ? "OK"
+                       : (r == CC1101_ERR_TIMEOUT) ? "TMOUT"
+                       : (r == CC1101_ERR_OVERFLOW)? "UNDERFLOW"
+                       :                             "ERR";
+        if (r == CC1101_OK) ok_count++; else fail_count++;
+
+        printf("  result=%-9s peak_marc=0x%02X  post-TX_marc=0x%02X\r\n",
+               rs, peak, marc_now);
+        printf("  FSCAL3=0x%02X  FSCAL2=0x%02X  FSCAL1=0x%02X   (stable nonzero = good)\r\n",
+               fscal3, fscal2, fscal1);
+        printf("  totals: OK=%lu  FAIL=%lu\r\n", ok_count, fail_count);
+
+        diag_iter++;
+        diag_pkt.packet_id++;
+        HAL_Delay(2000);   // 2 s between attempts — plenty of time to inspect SDR waterfall
+    }
+#endif /* DIAGNOSTIC_MODE */
 
     /* =====================================================================
      * TRANSMITTER MAIN LOOP
@@ -265,9 +348,24 @@ int main(void) {
             LED_Blink(1, 50, 0);   // Quick flash = packet received
 
         } else if (result == CC1101_ERR_CRC) {
-            /* Packet arrived but failed CRC — definitely a radio link error */
+            /* Packet arrived but failed CRC — dump the raw frame so we can
+             * tell what kind of corruption we have:
+             *   — RSSI very strong (-30 dBm) + LQI bad → AGC overload, add
+             *     attenuation or move antennas apart.
+             *   — RSSI moderate + LQI 20-40 + only 1–2 bytes look wrong →
+             *     frequency offset between the two xtals, widen RX channel BW.
+             *   — Bytes look like pure noise → wrong sync word / modulation
+             *     mismatch or receiver tuned far off.
+             *   — length byte absurd (>61) → length byte got corrupted,
+             *     which alone is enough to fail CRC on any frame. */
             crc_errors++;
-            printf("--- | CRC ERROR | (packet received but corrupted) Errors: %lu\r\n", crc_errors);
+            printf("--- | CRC ERR | RSSI %4d dBm | LQI %3d | len=%3u | raw:",
+                   rssi_dbm, g_cc1101_rx_lqi, g_cc1101_rx_raw_len);
+            uint8_t n = (g_cc1101_rx_raw_len < 8) ? g_cc1101_rx_raw_len : 8;
+            for (uint8_t i = 0; i < n; i++) {
+                printf(" %02X", g_cc1101_rx_raw[i]);
+            }
+            printf("  Errs=%lu\r\n", crc_errors);
 
         } else if (result == CC1101_ERR_TIMEOUT) {
             /* No packet during the 2-second window */
@@ -399,344 +497,3 @@ void Error_Handler(void) {
     __disable_irq();
     while (1) {}
 }
-/* USER CODE END Header */
-/* Includes ------------------------------------------------------------------*/
-#include "main.h"
-
-/* Private includes ----------------------------------------------------------*/
-/* USER CODE BEGIN Includes */
-#include "cc1101.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-/* USER CODE END Includes */
-
-/* Private typedef -----------------------------------------------------------*/
-/* USER CODE BEGIN PTD */
-
-/* USER CODE END PTD */
-
-/* Private define ------------------------------------------------------------*/
-/* USER CODE BEGIN PD */
-
-/* USER CODE END PD */
-
-/* Private macro -------------------------------------------------------------*/
-/* USER CODE BEGIN PM */
-
-/* USER CODE END PM */
-
-/* Private variables ---------------------------------------------------------*/
-SPI_HandleTypeDef hspi2;
-
-UART_HandleTypeDef huart2;
-
-/* USER CODE BEGIN PV */
-
-/* USER CODE END PV */
-
-/* Private function prototypes -----------------------------------------------*/
-void SystemClock_Config(void);
-static void MX_GPIO_Init(void);
-static void MX_USART2_UART_Init(void);
-static void MX_SPI2_Init(void);
-/* USER CODE BEGIN PFP */
-
-/* USER CODE END PFP */
-
-/* Private user code ---------------------------------------------------------*/
-/* USER CODE BEGIN 0 */
-
-/* USER CODE END 0 */
-
-/**
-  * @brief  The application entry point.
-  * @retval int
-  */
-int main(void)
-{
-
-  /* USER CODE BEGIN 1 */
-
-  /* USER CODE END 1 */
-
-  /* MCU Configuration--------------------------------------------------------*/
-
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();
-
-  /* USER CODE BEGIN Init */
-
-  /* USER CODE END Init */
-
-  /* Configure the system clock */
-  SystemClock_Config();
-
-  /* USER CODE BEGIN SysInit */
-
-  /* USER CODE END SysInit */
-
-  /* Initialize all configured peripherals */
-  MX_GPIO_Init();
-  MX_USART2_UART_Init();
-  MX_SPI2_Init();
-  /* USER CODE BEGIN 2 */
-    printf("STM32 Booting Up...\r\n");
-
-    // Run our massive initialization sequence
-    CC1101_Init();
-
-    // Ask the radio for its physical hardware Version ID
-    uint8_t radio_version = CC1101_ReadStatus(CC1101_VERSION);
-
-    // Print the result to the Mac!
-    printf("CC1101 Hardware Version: 0x%02X\r\n", radio_version);
-    uint32_t sequence_number = 0;
-     char uart_buffer[120];
-  /* USER CODE END 2 */
-
-  /* Infinite loop */
-  /* USER CODE BEGIN WHILE */
-  while (1)
-  {
-	  // 1. Generate randomized mock telemetry
-	        int rssi = -85 + (rand() % 15);      // Fluctuate between -85 and -70 dBm
-	        float ber = (rand() % 50) / 1000.0f; // Fluctuate between 0.0 and 0.05 %
-	        float snr = 12.0f + (rand() % 10);   // Fluctuate between 12.0 and 22.0 dB
-
-	        // Simulate an I/Q constellation (4 distinct clusters for QPSK)
-	        float i_val = 0.707f * (rand() % 2 == 0 ? 1 : -1) + ((rand() % 20 - 10) / 100.0f);
-	        float q_val = 0.707f * (rand() % 2 == 0 ? 1 : -1) + ((rand() % 20 - 10) / 100.0f);
-
-	        // Randomly drop a packet (skip a sequence number ~5% of the time)
-	        if ((rand() % 100) < 5) {
-	            sequence_number++;
-	        }
-
-	        // 2. Format the string exactly as your QML dashboard's C++ parser expects
-	        sprintf(uart_buffer, "RSSI:%d,BER:%.3f,SNR:%.1f,SEQ:%lu,I:%.3f,Q:%.3f\n",
-	                rssi, ber, snr, sequence_number, i_val, q_val);
-
-	        // 3. Transmit the string over the USB Virtual COM Port
-	        HAL_UART_Transmit(&huart2, (uint8_t*)uart_buffer, strlen(uart_buffer), HAL_MAX_DELAY);
-
-	        sequence_number++;
-
-	        // Wait 100 milliseconds (10 Hz refresh rate)
-	        HAL_Delay(100);
-    /* USER CODE END WHILE */
-
-    /* USER CODE BEGIN 3 */
-	  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
-	  HAL_Delay(500);
-  }
-  /* USER CODE END 3 */
-}
-
-/**
-  * @brief System Clock Configuration
-  * @retval None
-  */
-void SystemClock_Config(void)
-{
-  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
-  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
-
-  /** Configure the main internal regulator output voltage
-  */
-  __HAL_RCC_PWR_CLK_ENABLE();
-  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE3);
-
-  /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
-  RCC_OscInitStruct.PLL.PLLM = 16;
-  RCC_OscInitStruct.PLL.PLLN = 336;
-  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV4;
-  RCC_OscInitStruct.PLL.PLLQ = 2;
-  RCC_OscInitStruct.PLL.PLLR = 2;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Initializes the CPU, AHB and APB buses clocks
-  */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
-                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
-  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
-
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-}
-
-/**
-  * @brief SPI2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_SPI2_Init(void)
-{
-
-  /* USER CODE BEGIN SPI2_Init 0 */
-
-  /* USER CODE END SPI2_Init 0 */
-
-  /* USER CODE BEGIN SPI2_Init 1 */
-
-  /* USER CODE END SPI2_Init 1 */
-  /* SPI2 parameter configuration*/
-  hspi2.Instance = SPI2;
-  hspi2.Init.Mode = SPI_MODE_MASTER;
-  hspi2.Init.Direction = SPI_DIRECTION_2LINES;
-  hspi2.Init.DataSize = SPI_DATASIZE_8BIT;
-  hspi2.Init.CLKPolarity = SPI_POLARITY_LOW;
-  hspi2.Init.CLKPhase = SPI_PHASE_1EDGE;
-  hspi2.Init.NSS = SPI_NSS_SOFT;
-  hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
-  hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
-  hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
-  hspi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
-  hspi2.Init.CRCPolynomial = 10;
-  if (HAL_SPI_Init(&hspi2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN SPI2_Init 2 */
-
-  /* USER CODE END SPI2_Init 2 */
-
-}
-
-/**
-  * @brief USART2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USART2_UART_Init(void)
-{
-
-  /* USER CODE BEGIN USART2_Init 0 */
-
-  /* USER CODE END USART2_Init 0 */
-
-  /* USER CODE BEGIN USART2_Init 1 */
-
-  /* USER CODE END USART2_Init 1 */
-  huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
-  huart2.Init.WordLength = UART_WORDLENGTH_8B;
-  huart2.Init.StopBits = UART_STOPBITS_1;
-  huart2.Init.Parity = UART_PARITY_NONE;
-  huart2.Init.Mode = UART_MODE_TX_RX;
-  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN USART2_Init 2 */
-
-  /* USER CODE END USART2_Init 2 */
-
-}
-
-/**
-  * @brief GPIO Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_GPIO_Init(void)
-{
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
-  /* USER CODE BEGIN MX_GPIO_Init_1 */
-
-  /* USER CODE END MX_GPIO_Init_1 */
-
-  /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOC_CLK_ENABLE();
-  __HAL_RCC_GPIOH_CLK_ENABLE();
-  __HAL_RCC_GPIOA_CLK_ENABLE();
-  __HAL_RCC_GPIOB_CLK_ENABLE();
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin : B1_Pin */
-  GPIO_InitStruct.Pin = B1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : LD2_Pin */
-  GPIO_InitStruct.Pin = LD2_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : PB12 */
-  GPIO_InitStruct.Pin = GPIO_PIN_12;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-  /* USER CODE BEGIN MX_GPIO_Init_2 */
-
-  /* USER CODE END MX_GPIO_Init_2 */
-}
-
-/* USER CODE BEGIN 4 */
-int _write(int file, char *ptr, int len) {
-    /* Send the characters over USART2 to the USB cable */
-    HAL_UART_Transmit(&huart2, (uint8_t*)ptr, len, HAL_MAX_DELAY);
-    return len;
-}
-
-/* USER CODE END 4 */
-
-/**
-  * @brief  This function is executed in case of error occurrence.
-  * @retval None
-  */
-void Error_Handler(void)
-{
-  /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
-  __disable_irq();
-  while (1)
-  {
-  }
-  /* USER CODE END Error_Handler_Debug */
-}
-#ifdef USE_FULL_ASSERT
-/**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
-void assert_failed(uint8_t *file, uint32_t line)
-{
-  /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
-  /* USER CODE END 6 */
-}
-#endif /* USE_FULL_ASSERT */
