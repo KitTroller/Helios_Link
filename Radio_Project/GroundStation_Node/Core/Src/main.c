@@ -374,6 +374,18 @@ int main(void) {
             if (timeouts % 5 == 0) {
                 printf("--- | TIMEOUT   | (no packet) Timeouts: %lu\r\n", timeouts);
             }
+
+        } else if (result == CC1101_ERR_SMALL_FRAME) {
+            printf("--- | CC1101_ERR_SMALL_FRAME   | (no packet)\r\n");
+
+        } else if (result == CC1101_ERR_IDLE_NOT_REACHED) {
+            printf("--- | CC1101_ERR_IDLE_NOT_REACHED   | (no packet)\r\n");
+
+        } else if (result == CC1101_ERR_OVERFLOW) {
+            printf("--- | CC1101_ERR_OVERFLOW   | (no packet)\r\n");
+
+        } else if (result == CC1101_ERR_FRAME) {
+            printf("--- | CC1101_ERR_FRAME   | (incomplete frame)\r\n");
         }
     }
 
@@ -443,7 +455,7 @@ static void MX_SPI2_Init(void) {
     hspi2.Init.CLKPolarity       = SPI_POLARITY_LOW;   // CPOL=0: clock idles LOW
     hspi2.Init.CLKPhase          = SPI_PHASE_1EDGE;    // CPHA=0: sample on rising edge
     hspi2.Init.NSS               = SPI_NSS_SOFT;       // We control CS manually via GPIO
-    hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;  // ~2.6 MHz (well under CC1101's 10 MHz max)
+    hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_64;  // 42 MHz / 64 ~ 656 kHz: slowed down for margin on the long breadboard jumpers (was /16 ~ 2.6 MHz)
     hspi2.Init.FirstBit          = SPI_FIRSTBIT_MSB;
     hspi2.Init.TIMode            = SPI_TIMODE_DISABLE;
     hspi2.Init.CRCCalculation    = SPI_CRCCALCULATION_DISABLE;

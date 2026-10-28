@@ -556,11 +556,25 @@ CC1101_Status_t CC1101_ReceivePacket(CC1101_Packet_t *pkt, int8_t *rssi_out, uin
 
     /* Flush and start RX */
     CC1101_SendCmd(CC1101_SIDLE);
+
+    /*Ensure idle state is reached*/
+    uint32_t deadline = HAL_GetTick() + 10;
+    uint8_t idle_state;
+    while((idle_state = (CC1101_ReadStatus(CC1101_MARCSTATE) & 0x1F)) != CC1101_STATE_IDLE){
+    	/* SIDLE can't leave RX FIFO overflow: only SFRX can (datasheet state diagram) */
+    	if(idle_state == CC1101_STATE_RXFIFO_OVERFLOW){
+    		CC1101_SendCmd(CC1101_SFRX);
+    	}
+    	if(HAL_GetTick() > deadline){
+    		return CC1101_ERR_IDLE_NOT_REACHED;
+    	}
+    }
+
     CC1101_SendCmd(CC1101_SFRX);
     CC1101_SendCmd(CC1101_SRX);
 
     /* Wait for bytes to appear in the RX FIFO */
-    uint32_t deadline = HAL_GetTick() + timeout_ms;
+    deadline = HAL_GetTick() + timeout_ms;
     while (CC1101_ReadStatus(CC1101_RXBYTES) == 0) {
         if (HAL_GetTick() > deadline) {
             CC1101_SendCmd(CC1101_SIDLE);
@@ -569,9 +583,9 @@ CC1101_Status_t CC1101_ReceivePacket(CC1101_Packet_t *pkt, int8_t *rssi_out, uin
     }
 
     /* Small delay to let the full packet settle into the FIFO.
-     * At 1.2 kbps, a maximum-length 61-byte packet takes ~50 ms to receive.
-     * RXBYTES becoming non-zero just means the first byte arrived.
-     * We wait for the radio to leave RX state (back to IDLE after full packet). */
+     * At 1.2 kbps, a maximum-length 21-byte packet takes ~60 ms to receive.
+     * longer unexpected packets, a maximum of 61bytes get cut and cought by the frame check
+     */
     deadline = HAL_GetTick() + 100;
     uint8_t state;
     do {
@@ -592,8 +606,16 @@ CC1101_Status_t CC1101_ReceivePacket(CC1101_Packet_t *pkt, int8_t *rssi_out, uin
         /* Minimum valid frame: length byte + packet_id + command = 3 bytes
          * (not counting the 2 appended status bytes yet) */
         CC1101_SendCmd(CC1101_SFRX);
-        return CC1101_ERR_TIMEOUT;
+        return CC1101_ERR_SMALL_FRAME;
     }
+    else if (rxbytes >> 7 == 1){
+    	CC1101_SendCmd(CC1101_SIDLE);
+    	CC1101_SendCmd(CC1101_SFRX);
+    	return CC1101_ERR_OVERFLOW;
+    }
+
+    uint8_t bytes_in_fifo = 0;
+    bytes_in_fifo = rxbytes & 0x7F;
 
     /* Burst-read everything from the RX FIFO in one SPI transaction.
      * Buffer layout after this call:
@@ -605,7 +627,12 @@ CC1101_Status_t CC1101_ReceivePacket(CC1101_Packet_t *pkt, int8_t *rssi_out, uin
      *   rx_raw[length+2]       = LQI[6:0] | CRC_OK[7] (appended by hardware)
      */
     uint8_t rx_raw[64];
-    CC1101_ReadFIFO(rx_raw, rxbytes);
+    if(bytes_in_fifo > sizeof(rx_raw)){
+    	CC1101_SendCmd(CC1101_SIDLE);
+    	CC1101_SendCmd(CC1101_SFRX);
+    	return CC1101_ERR_OVERFLOW;
+    }
+    CC1101_ReadFIFO(rx_raw, bytes_in_fifo);
 
     uint8_t frame_len = rx_raw[0];  // How many data bytes follow (not counting length byte itself)
 
@@ -614,18 +641,22 @@ CC1101_Status_t CC1101_ReceivePacket(CC1101_Packet_t *pkt, int8_t *rssi_out, uin
         CC1101_SendCmd(CC1101_SFRX);
         return CC1101_ERR_OVERFLOW;
     }
-
+    if (frame_len + 3 != bytes_in_fifo){
+    	CC1101_SendCmd(CC1101_SIDLE);
+    	CC1101_SendCmd(CC1101_SFRX);
+    	return CC1101_ERR_FRAME;
+    }
     /* The last two bytes in rx_raw are the hardware-appended status bytes.
      * rxbytes = 1 (length byte) + frame_len (data) + 2 (status bytes)
      * So status bytes sit at indices: rxbytes-2 and rxbytes-1 */
-    uint8_t rssi_raw  = rx_raw[rxbytes - 2];
-    uint8_t lqi_byte  = rx_raw[rxbytes - 1];
+    uint8_t rssi_raw  = rx_raw[bytes_in_fifo - 2];
+    uint8_t lqi_byte  = rx_raw[bytes_in_fifo - 1];
     uint8_t crc_ok    = (lqi_byte >> 7) & 0x01;   // Bit 7 = CRC_OK flag
 
     /* Snapshot the first bytes + LQI into diagnostic globals.
      * Populated BEFORE the CRC check, so main.c can inspect the corrupted
      * frame on CRC_ERR return and see the corruption pattern. */
-    uint8_t copy_len = (rxbytes < 16) ? rxbytes : 16;
+    uint8_t copy_len = (bytes_in_fifo < 16) ? bytes_in_fifo : 16;
     for (uint8_t i = 0; i < copy_len; i++) {
         g_cc1101_rx_raw[i] = rx_raw[i];
     }

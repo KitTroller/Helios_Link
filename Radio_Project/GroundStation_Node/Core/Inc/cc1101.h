@@ -55,6 +55,9 @@ typedef enum {
     CC1101_ERR_TIMEOUT    = 2,  // Waited too long for TX to finish or RX packet to arrive
     CC1101_ERR_CRC        = 3,  // Packet received but CRC check failed — corrupted in air
     CC1101_ERR_OVERFLOW   = 4,  // FIFO overflowed — packet too large or FIFO not flushed
+	CC1101_ERR_FRAME	  = 5,  // in case of just mangled data
+	CC1101_ERR_SMALL_FRAME = 6,
+	CC1101_ERR_IDLE_NOT_REACHED = 7,
 } CC1101_Status_t;
 
 /* =========================================================================
