@@ -67,7 +67,7 @@ class blk(gr.sync_block):
             self.bits.append(int(bits[i]))
             if len(self.bits) == 8:
                 L = int(np.packbits(self.bits)[0]) ^ self.white[0]  # packs into bytes
-                if L < 2 | L > 61:  # impossible length it was a false sync buffer is 64 bytes in cc1101 61 + 1 itself + 2 CRC = 64
+                if ((L < 2) or (L > 61)):  # impossible length it was a false sync buffer is 64 bytes in cc1101 61 + 1 itself + RSSI and LQI/CRC_OK = 64
                     self.collecting = False
                     self.bits = []
                     self.need = 0
