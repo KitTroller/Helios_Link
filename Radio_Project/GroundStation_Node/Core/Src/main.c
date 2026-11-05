@@ -72,9 +72,9 @@
  * EU LEGAL NOTE — DUTY CYCLE
  * =========================================================================
  * 868.0–868.6 MHz: max 25 mW ERP, duty cycle ≤ 1%
- * At 1.2 kbps, a 10-byte payload takes ~17 ms to transmit.
+ * At 1.2 kbps, a 8-byte payload takes ~140 ms to transmit with 21 bytes on air.
  * 1% duty cycle at 1s period = 10 ms max TX time.
- * Our 1-second beacon interval gives ~1.7% — fine for testing in a lab.
+ * Our 1-second beacon interval gives ~11.7% — fine for testing in a lab.
  * For outdoor/range tests, increase interval to 2 seconds or more.
  */
 /* USER CODE END Header */
@@ -194,7 +194,7 @@ int main(void) {
            CC1101_ReadReg(CC1101_FSCAL1));
     printf("  VERSION = 0x%02X  (expect 0x14)\r\n", CC1101_ReadStatus(CC1101_VERSION));
 
-    printf("\r\nTuning target: 868.35 MHz. Set SDR++ to 2 MHz span, bandwidth wide open.\r\n");
+    printf("\r\n Programmed 868.000, measured 867.905. Set SDR++ to 2 MHz span, bandwidth wide open.\r\n");
     printf("Running max-length TX every 2 seconds. Watch the SDR waterfall after each marker.\r\n");
     printf("Peak MARCSTATE should be 0x13 (TX). FSCAL1 should be nonzero and STABLE across runs.\r\n\r\n");
 
@@ -210,7 +210,7 @@ int main(void) {
 
     while (1) {
         /* Loud marker right before TX so you can align with SDR waterfall */
-        printf("\r\n--- [iter %lu] TX NOW (watch SDR at 868.35 MHz) ---\r\n", diag_iter);
+        printf("\r\n--- [iter %lu] TX NOW (watch SDR at 867.905 MHz) ---\r\n", diag_iter);
         HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);  // LED ON during TX
 
         CC1101_Status_t r = CC1101_SendPacket(&diag_pkt);
@@ -281,7 +281,7 @@ int main(void) {
         }
 
         sequence_number++;         // Rolls over at 255 → 0, that's fine
-        HAL_Delay(1000);           // 1 second between packets (~1.7% duty cycle)
+        HAL_Delay(1000);           // 1 second between packets (~11.7% duty cycle)
     }
 
 #endif /* NODE_TRANSMITTER */

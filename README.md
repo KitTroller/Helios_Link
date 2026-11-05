@@ -4,7 +4,7 @@ Helios Link is an educational project attempting to achieve a GFSK RF link over 
 
 ## Radio link
 
-The actual link is over **867.905 MHz** due to a **108 ppm** crystal offset in both CC1101 boards, that translates directly onto the CC1101's synthesizer frequency used for modulating the signal.
+The actual link is over **867.905 MHz** due to a -95khz, **-108 ppm**, offset from programmed 868Mhz was measured on the transmitter with the RTL SDR V4. That offset translates directly onto the CC1101's synthesizer frequency used for modulating the signal. The CC1101 receiver's offset is assumed to be similar since the signal was received without any further frequency tuning, thus its offset being between -82ppm and -135ppm so the signal lands within the receivers filter. 
 
 A bit rate of **1.2 kbps** was used to maximise receiver sensitivity. Modulation index was set to **h = 8.6**, sending packets every **1.2 s**.
 

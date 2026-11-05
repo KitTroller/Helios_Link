@@ -228,7 +228,7 @@ blocks:
     bus_structure: null
     coordinate: [128, 192.0]
     rotation: 0
-    state: disabled
+    state: enabled
 - name: blocks_throttle2_0
   id: blocks_throttle2
   parameters:
@@ -249,7 +249,7 @@ blocks:
     bus_structure: null
     coordinate: [296, 208.0]
     rotation: 0
-    state: disabled
+    state: enabled
 - name: digital_binary_slicer_fb_0
   id: digital_binary_slicer_fb
   parameters:
@@ -324,7 +324,7 @@ blocks:
       \ & 1\n            state = (state >> 1) | (feed_back_bit << 8)\n    return out\n\
       \n\ndef crc_16(data):\n    crc = 0xFFFF\n    crc_polynomial = 0x8005\n    for\
       \ byte in data:\n        for _ in range(8):\n            if(((crc & 0x8000)\
-      \ >> 8)  ^ (byte & 0x80)):\n                crc = (crc << 1) ^ crc_polynomial\n\
+      \ >> 8) ^ (byte & 0x80)):\n                crc = (crc << 1) ^ crc_polynomial\n\
       \            else:\n                crc = crc << 1\n            \n         \
       \   crc = crc & 0xFFFF\n            byte = (byte << 1) & 0xFF\n    return crc\n\
       \n\n\nclass blk(gr.sync_block):\n    def __init__(self, tag_name=\"sync\"):\
@@ -1008,7 +1008,7 @@ blocks:
     bus_structure: null
     coordinate: [128, 296.0]
     rotation: 0
-    state: enabled
+    state: disabled
 
 connections:
 - [analog_pwr_squelch_xx_0, '0', analog_quadrature_demod_cf_0_0, '0']

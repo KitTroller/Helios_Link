@@ -26,7 +26,7 @@ def crc_16(data):
     crc_polynomial = 0x8005
     for byte in data:
         for _ in range(8):
-            if(((crc & 0x8000) >> 8)  ^ (byte & 0x80)):
+            if(((crc & 0x8000) >> 8) ^ (byte & 0x80)):
                 crc = (crc << 1) ^ crc_polynomial
             else:
                 crc = crc << 1

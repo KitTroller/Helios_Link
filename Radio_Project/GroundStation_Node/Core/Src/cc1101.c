@@ -189,11 +189,11 @@ void CC1101_SendCmd(uint8_t cmd) {
  * Full initialisation sequence. This must be called on boot before any TX/RX.
  *
  * Register values chosen by TI's SmartRF Studio for:
- *   Carrier:    868.35 MHz (EU ISM band)
+ *   Carrier:    867.905 MHz (EU ISM band)
  *   Modulation: GFSK (Gaussian-shaped FSK — cleaner spectrum than plain FSK,
  *               required for EU type approval, and better for GNU Radio decoding)
  *   Data rate:  1.2 kbps (minimum rate = maximum range = best sensitivity ~-112 dBm)
- *   Deviation:  5.157 kHz (narrow GFSK, maximises sensitivity at this data rate)
+ *   Deviation:  5.157 kHz (GFSK, h = 8.6)
  *   Channel BW: 58.5 kHz (fits our signal with plenty of margin)
  *   TX power:   +12 dBm (maximum for CC1101)
  *   Packet mode: variable length, CRC-16 enabled, data whitening enabled
@@ -235,7 +235,7 @@ void CC1101_Init(void) {
     }
     CS_HIGH();
 
-    /* --- Step 2: Carrier frequency — 868.35 MHz ---
+    /* --- Step 2: Carrier frequency — 867.905 MHz ---
      *
      * Formula: FREQ = F_carrier × 2^16 / F_xosc = 868.35e6 × 65536 / 26e6 = 2,188,918
      * In hex: 0x216276
@@ -276,7 +276,7 @@ void CC1101_Init(void) {
     /* DEVIATN = 0x15: FSK frequency deviation
      * bits [6:4] = 1 → exponent, bits [2:0] = 5 → mantissa
      * Deviation = 26e6 × (8 + 5) × 2^(1-17) = 5157 Hz ≈ 5.16 kHz
-     * Narrow deviation at 1.2 kbps = good sensitivity. */
+     *h=8.6 deviation at 1.2 kbps could be reduced when using GNU reciever now we are limited by 58khz filter */
     CC1101_WriteReg(CC1101_DEVIATN, 0x15);
 
     /* --- Step 4: Packet engine configuration ---
@@ -416,8 +416,8 @@ CC1101_Status_t CC1101_Verify(void) {
  *  4. STX command: the CC1101 takes over. It transmits:
  *       4× preamble bytes (0xAA) → sync word (0xD391) → length byte →
  *       our data → CRC-16 (hardware calculated and appended)
- *     Total over-air bytes for a 10-byte payload: 4+2+1+12+2 = 21 bytes
- *     At 1.2 kbps, this takes about 17.5 ms.
+ *     Total over-air bytes for a 8-byte payload: 4+4+1+1+1+8+2 = 21 bytes
+ *     At 1.2 kbps, this takes about 140 ms.
  *
  *  5. We poll MARCSTATE until the radio returns to IDLE (TX complete).
  *     Polling is safe here — at 1.2 kbps, we know the max wait time.
@@ -531,7 +531,7 @@ CC1101_Status_t CC1101_SendPacket(CC1101_Packet_t *pkt) {
  *  1. We go to IDLE, flush the RX FIFO (clear any partial previous packet),
  *     then send SRX to start the receiver.
  *
- *  2. The CC1101 is now listening on 868.35 MHz. Its AGC automatically
+ *  2. The CC1101 is now listening on 867.905 MHz. Its AGC automatically
  *     adjusts gain. It scans incoming bits for the preamble + sync word.
  *     When it finds a valid sync word, it starts capturing the packet into
  *     the RX FIFO.
